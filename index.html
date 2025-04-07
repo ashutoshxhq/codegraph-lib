@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Code Graph Visualization</title>
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                font-family: Arial, sans-serif;
+                overflow: hidden;
+            }
+
+            #graph-container {
+                width: 100vw;
+                height: 100vh;
+                background-color: #f9f9f9;
+            }
+
+            .node {
+                cursor: pointer;
+            }
+
+            .link {
+                stroke: #999;
+                stroke-opacity: 0.6;
+            }
+
+            .node text {
+                font-size: 10px;
+            }
+
+            #details-panel {
+                position: fixed;
+                right: 0;
+                top: 0;
+                width: 300px;
+                height: 100vh;
+                background-color: white;
+                border-left: 1px solid #ccc;
+                padding: 15px;
+                overflow-y: auto;
+                box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+                transform: translateX(100%);
+                transition: transform 0.3s ease;
+            }
+
+            #details-panel.open {
+                transform: translateX(0);
+            }
+
+            #close-panel {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                cursor: pointer;
+                font-size: 18px;
+            }
+
+            .controls {
+                position: fixed;
+                left: 20px;
+                top: 20px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                z-index: 100;
+            }
+
+            button {
+                padding: 8px 12px;
+                background-color: #4caf50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+
+            button:hover {
+                background-color: #45a049;
+            }
+
+            .legend {
+                position: fixed;
+                left: 20px;
+                bottom: 20px;
+                background-color: rgba(255, 255, 255, 0.8);
+                padding: 10px;
+                border-radius: 5px;
+                border: 1px solid #ddd;
+            }
+
+            .legend-item {
+                display: flex;
+                align-items: center;
+                margin-bottom: 5px;
+            }
+
+            .legend-color {
+                width: 15px;
+                height: 15px;
+                border-radius: 50%;
+                margin-right: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="controls">
+            <button id="zoom-in">Zoom In</button>
+            <button id="zoom-out">Zoom Out</button>
+            <button id="reset-view">Reset View</button>
+            <button id="toggle-labels">Toggle Labels</button>
+            <select id="filter-type">
+                <option value="all">All Types</option>
+                <option value="Function">Functions</option>
+                <option value="Method">Methods</option>
+                <option value="Class">Classes</option>
+                <option value="Interface">Interfaces</option>
+                <option value="Module">Modules</option>
+                <option value="Variable">Variables</option>
+                <option value="Constant">Constants</option>
+                <option value="TypeDefinition">Type Definitions</option>
+            </select>
+        </div>
+
+        <div id="graph-container"></div>
+
+        <div class="legend">
+            <h3>Node Types</h3>
+            <div class="legend-item">
+                <div
+                    class="legend-color"
+                    style="background-color: #ff7f0e"
+                ></div>
+                Function/Method
+            </div>
+            <div class="legend-item">
+                <div
+                    class="legend-color"
+                    style="background-color: #2ca02c"
+                ></div>
+                Class
+            </div>
+            <div class="legend-item">
+                <div
+                    class="legend-color"
+                    style="background-color: #d62728"
+                ></div>
+                Interface
+            </div>
+            <div class="legend-item">
+                <div
+                    class="legend-color"
+                    style="background-color: #9467bd"
+                ></div>
+                Module
+            </div>
+            <div class="legend-item">
+                <div
+                    class="legend-color"
+                    style="background-color: #8c564b"
+                ></div>
+                Variable
+            </div>
+            <div class="legend-item">
+                <div
+                    class="legend-color"
+                    style="background-color: #e377c2"
+                ></div>
+                Constant
+            </div>
+            <div class="legend-item">
+                <div
+                    class="legend-color"
+                    style="background-color: #7f7f7f"
+                ></div>
+                Type Definition
+            </div>
+        </div>
+
+        <div id="details-panel">
+            <span id="close-panel">&times;</span>
+            <h2 id="node-name"></h2>
+            <div id="node-details"></div>
+        </div>
+
+        <script>
+            // File input handling - you can also hardcode the path to your JSON file
+            const urlParams = new URLSearchParams(window.location.search);
+            const jsonPath = urlParams.get("file") || "code_graph.json";
+
+            // Initialize the graph
+            let nodes = [];
+            let links = [];
+            let simulation;
+            let svg;
+            let zoom;
+            let showLabels = true;
+
+            // Load graph data
+            fetch(jsonPath)
+                .then((response) => response.json())
+                .then((graphData) => {
+                    // Process nodes
+                    nodes = Object.values(graphData.nodes).map((node) => ({
+                        id: node.id,
+                        name: node.name,
+                        type: node.node_type,
+                        file: node.file_path,
+                        lineRange: node.line_range,
+                        content: node.content,
+                        summary: node.summary,
+                        metadata: node.metadata,
+                    }));
+
+                    // Process links
+                    Object.entries(graphData.outgoing_edges).forEach(
+                        ([fromId, relationships]) => {
+                            relationships.forEach((rel) => {
+                                links.push({
+                                    source: fromId,
+                                    target: rel.to_id,
+                                    type: rel.relationship_type,
+                                });
+                            });
+                        },
+                    );
+
+                    initializeGraph();
+                })
+                .catch((error) => {
+                    console.error("Error loading graph data:", error);
+                    document.getElementById("graph-container").innerHTML =
+                        `<div style="padding: 20px; color: red;">Error loading graph data: ${error.message}</div>`;
+                });
+
+            function initializeGraph() {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+
+                // Create SVG container
+                svg = d3
+                    .select("#graph-container")
+                    .append("svg")
+                    .attr("width", "100%")
+                    .attr("height", "100%");
+
+                // Add zoom behavior
+                zoom = d3
+                    .zoom()
+                    .scaleExtent([0.1, 8])
+                    .on("zoom", (event) => {
+                        mainGroup.attr("transform", event.transform);
+                    });
+
+                svg.call(zoom);
+
+                // Create main group for zooming
+                const mainGroup = svg.append("g");
+
+                // Create force simulation
+                simulation = d3
+                    .forceSimulation(nodes)
+                    .force(
+                        "link",
+                        d3
+                            .forceLink(links)
+                            .id((d) => d.id)
+                            .distance(100),
+                    )
+                    .force("charge", d3.forceManyBody().strength(-300))
+                    .force("center", d3.forceCenter(width / 2, height / 2))
+                    .force("x", d3.forceX(width / 2).strength(0.05))
+                    .force("y", d3.forceY(height / 2).strength(0.05));
+
+                // Create links
+                const link = mainGroup
+                    .append("g")
+                    .selectAll("line")
+                    .data(links)
+                    .enter()
+                    .append("line")
+                    .attr("class", "link")
+                    .attr("stroke-width", (d) => getStrokeWidth(d.type))
+                    .attr("stroke", (d) => getLinkColor(d.type));
+
+                // Create node groups
+                const node = mainGroup
+                    .append("g")
+                    .selectAll(".node")
+                    .data(nodes)
+                    .enter()
+                    .append("g")
+                    .attr("class", "node")
+                    .call(
+                        d3
+                            .drag()
+                            .on("start", dragStarted)
+                            .on("drag", dragged)
+                            .on("end", dragEnded),
+                    );
+
+                // Add circles to nodes
+                node.append("circle")
+                    .attr("r", 8)
+                    .attr("fill", (d) => getNodeColor(d.type))
+                    .on("click", showNodeDetails);
+
+                // Add text labels to nodes
+                const labels = node
+                    .append("text")
+                    .attr("dx", 12)
+                    .attr("dy", ".35em")
+                    .text((d) => d.name)
+                    .attr("font-size", "10px");
+
+                if (!showLabels) {
+                    labels.style("display", "none");
+                }
+
+                // Set up simulation tick handling
+                simulation.on("tick", () => {
+                    link.attr("x1", (d) => d.source.x)
+                        .attr("y1", (d) => d.source.y)
+                        .attr("x2", (d) => d.target.x)
+                        .attr("y2", (d) => d.target.y);
+
+                    node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+                });
+
+                // Set up UI controls
+                document
+                    .getElementById("zoom-in")
+                    .addEventListener("click", () => {
+                        zoom.scaleBy(svg.transition().duration(750), 1.5);
+                    });
+
+                document
+                    .getElementById("zoom-out")
+                    .addEventListener("click", () => {
+                        zoom.scaleBy(svg.transition().duration(750), 0.75);
+                    });
+
+                document
+                    .getElementById("reset-view")
+                    .addEventListener("click", () => {
+                        svg.transition()
+                            .duration(750)
+                            .call(
+                                zoom.transform,
+                                d3.zoomIdentity
+                                    .translate(width / 2, height / 2)
+                                    .scale(1)
+                                    .translate(-width / 2, -height / 2),
+                            );
+                    });
+
+                document
+                    .getElementById("toggle-labels")
+                    .addEventListener("click", () => {
+                        showLabels = !showLabels;
+                        d3.selectAll(".node text").style(
+                            "display",
+                            showLabels ? "block" : "none",
+                        );
+                    });
+
+                document
+                    .getElementById("filter-type")
+                    .addEventListener("change", function () {
+                        const type = this.value;
+
+                        if (type === "all") {
+                            node.style("display", "block");
+                            link.style("display", "block");
+                        } else {
+                            // Show only selected node type
+                            node.style("display", (d) =>
+                                d.type === type ? "block" : "none",
+                            );
+
+                            // Show only links connecting visible nodes
+                            link.style("display", (d) => {
+                                const sourceNode = nodes.find(
+                                    (n) =>
+                                        n.id === d.source.id ||
+                                        n.id === d.source,
+                                );
+                                const targetNode = nodes.find(
+                                    (n) =>
+                                        n.id === d.target.id ||
+                                        n.id === d.target,
+                                );
+
+                                return sourceNode &&
+                                    targetNode &&
+                                    sourceNode.type === type &&
+                                    targetNode.type === type
+                                    ? "block"
+                                    : "none";
+                            });
+                        }
+                    });
+
+                document
+                    .getElementById("close-panel")
+                    .addEventListener("click", () => {
+                        document
+                            .getElementById("details-panel")
+                            .classList.remove("open");
+                    });
+            }
+
+            function dragStarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+
+            function dragEnded(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
+
+            function showNodeDetails(event, d) {
+                const panel = document.getElementById("details-panel");
+                const nameElement = document.getElementById("node-name");
+                const detailsElement = document.getElementById("node-details");
+
+                nameElement.textContent = d.name;
+
+                // Build details HTML
+                let detailsHtml = `
+                <p><strong>Type:</strong> ${d.type}</p>
+                <p><strong>File:</strong> ${d.file}</p>
+                <p><strong>Lines:</strong> ${d.lineRange[0]} - ${d.lineRange[1]}</p>
+            `;
+
+                if (d.summary) {
+                    detailsHtml += `<p><strong>Summary:</strong> ${d.summary}</p>`;
+                }
+
+                if (d.metadata && Object.keys(d.metadata).length > 0) {
+                    detailsHtml += `<h3>Metadata</h3><ul>`;
+                    for (const [key, value] of Object.entries(d.metadata)) {
+                        detailsHtml += `<li><strong>${key}:</strong> ${value}</li>`;
+                    }
+                    detailsHtml += `</ul>`;
+                }
+
+                detailsHtml += `<h3>Code</h3><pre style="overflow-x: auto; background-color: #f5f5f5; padding: 10px; border-radius: 5px;">${escapeHtml(d.content)}</pre>`;
+
+                // Find related nodes
+                const relatedLinks = links.filter(
+                    (link) =>
+                        link.source.id === d.id ||
+                        link.source === d.id ||
+                        link.target.id === d.id ||
+                        link.target === d.id,
+                );
+
+                if (relatedLinks.length > 0) {
+                    detailsHtml += `<h3>Relationships</h3><ul>`;
+                    for (const link of relatedLinks) {
+                        const isSource =
+                            link.source.id === d.id || link.source === d.id;
+                        const otherNodeId = isSource
+                            ? link.target.id || link.target
+                            : link.source.id || link.source;
+                        const otherNode = nodes.find(
+                            (n) => n.id === otherNodeId,
+                        );
+
+                        if (otherNode) {
+                            detailsHtml += `<li><strong>${isSource ? "Outgoing" : "Incoming"}:</strong> ${link.type} ${isSource ? "to" : "from"} ${otherNode.name} (${otherNode.type})</li>`;
+                        }
+                    }
+                    detailsHtml += `</ul>`;
+                }
+
+                detailsElement.innerHTML = detailsHtml;
+                panel.classList.add("open");
+            }
+
+            function getNodeColor(type) {
+                switch (type) {
+                    case "Function":
+                        return "#ff7f0e";
+                    case "Method":
+                        return "#ff7f0e";
+                    case "Class":
+                        return "#2ca02c";
+                    case "Interface":
+                        return "#d62728";
+                    case "Module":
+                        return "#9467bd";
+                    case "Variable":
+                        return "#8c564b";
+                    case "Constant":
+                        return "#e377c2";
+                    case "TypeDefinition":
+                        return "#7f7f7f";
+                    default:
+                        return "#1f77b4";
+                }
+            }
+
+            function getLinkColor(type) {
+                switch (type) {
+                    case "Calls":
+                        return "#ff0000";
+                    case "Imports":
+                        return "#00ff00";
+                    case "Inherits":
+                        return "#0000ff";
+                    case "References":
+                        return "#999999";
+                    case "Implements":
+                        return "#9932cc";
+                    case "Contains":
+                        return "#ffa500";
+                    case "DependsOn":
+                        return "#8b4513";
+                    default:
+                        return "#999999";
+                }
+            }
+
+            function getStrokeWidth(type) {
+                switch (type) {
+                    case "Calls":
+                        return 2;
+                    case "Imports":
+                        return 3;
+                    case "Inherits":
+                        return 2.5;
+                    default:
+                        return 1;
+                }
+            }
+
+            function escapeHtml(text) {
+                return text
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            }
+
+            // Handle window resize
+            window.addEventListener("resize", () => {
+                if (simulation) {
+                    simulation
+                        .force(
+                            "center",
+                            d3.forceCenter(
+                                window.innerWidth / 2,
+                                window.innerHeight / 2,
+                            ),
+                        )
+                        .force(
+                            "x",
+                            d3.forceX(window.innerWidth / 2).strength(0.05),
+                        )
+                        .force(
+                            "y",
+                            d3.forceY(window.innerHeight / 2).strength(0.05),
+                        )
+                        .alpha(0.3)
+                        .restart();
+                }
+            });
+        </script>
+    </body>
+</html>
